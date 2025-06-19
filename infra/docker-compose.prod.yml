@@ -1,0 +1,52 @@
+version: '3.8'
+
+volumes:
+  media-data:
+  upload-data:
+  config-data:
+  caddy_data: # For Caddy's SSL certificates and other data
+  caddy_config: # For Caddy's configuration
+
+services:
+  api:
+    image: your-prod-api-image:latest # Placeholder, to be built later
+    restart: unless-stopped
+    expose: # Expose port only to linked services, not host
+      - "8000"
+    volumes:
+      - media-data:/media
+      - upload-data:/uploads
+      - config-data:/config
+    networks:
+      - app_network
+
+  web:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ../frontend/dist:/usr/share/nginx/html # Assuming build output is in frontend/dist
+      # If web needs to serve files from media/uploads, these can be added.
+      # Nginx can also be configured to proxy to API for these if auth is needed.
+      # For now, assuming Caddy will route /media and /uploads to API or specific web paths.
+    networks:
+      - app_network
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile # Will be created in next step
+      - config-data:/app-config # Mount app config distinctly
+      - caddy_data:/data # For Caddy's own persistent data (like SSL certs)
+      - caddy_config:/config # For Caddy's configuration backups
+    depends_on:
+      - api
+      - web
+    networks:
+      - app_network
+
+networks:
+  app_network:
