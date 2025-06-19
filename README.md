@@ -1,3 +1,32 @@
+# Project Title (To be updated)
+
+This project is a monorepo containing a backend service and a frontend application.
+
+## Development Setup
+
+To get the development environment running:
+
+1.  **Prerequisites:**
+    *   Docker and Docker Compose installed.
+    *   VS Code with the Dev Containers extension (optional, for using `.devcontainer`).
+
+2.  **Clone the repository:**
+    ```bash
+    git clone <repository-url>
+    cd <repository-name>
+    ```
+
+3.  **Run the services:**
+    ```bash
+    docker-compose up
+    ```
+    This will start:
+    *   The backend API service on `http://localhost:8000`
+    *   The frontend development server on `http://localhost:5173`
+
+    You should see messages indicating that the "Torb Records API alive" and "Web dev server ready".
+
+---
 # Torb Records
 
 > **A personal, arcade‑inspired music‑streaming PWA for you and your friends.**
