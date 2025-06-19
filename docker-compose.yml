@@ -1,9 +1,20 @@
+# Define named volumes at the top level, even though we use bind mounts for them in dev.
+# This makes it consistent with the prod setup in terms of volume *names*.
+volumes:
+  media-data:
+  upload-data:
+  config-data:
+
 services:
   api:
     image: python:3.11-slim
     working_dir: /app/backend
     volumes:
       - ./backend:/app/backend
+      # Bind mount local directories to the paths corresponding to named volumes
+      - ./media-data:/media
+      - ./upload-data:/uploads
+      - ./config-data:/config
     ports:
       - "8000:8000"
     command: >
