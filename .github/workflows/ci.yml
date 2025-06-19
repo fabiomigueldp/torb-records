@@ -1,0 +1,38 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend dependencies and linters
+        working-directory: ./backend
+        run: pip install -r requirements.txt ruff black
+
+      - name: Lint backend
+        working-directory: ./backend
+        run: |
+          ruff check .
+          black --check .
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm' # Keep npm caching, it can still cache individual packages
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm install # Changed from npm ci
+
+      - name: Lint frontend
+        working-directory: ./frontend
+        run: npm run lint
