@@ -1,3 +1,9 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  --header-height: 4rem; /* Example: Adjust to actual header height */
+  --player-height: 6rem; /* Example: Adjust to actual audio player height */
+  /* Ensure these values match your application's layout */
+}

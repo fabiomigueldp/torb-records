@@ -68,8 +68,49 @@ class ConnectionManager:
                 print(f"Error sending presence to {failed_username}: {result}")
                 # Consider disconnecting this user if send fails repeatedly
 
+    async def broadcast_chat_message(self, sender: str, content: str, timestamp: str, message_id: int):
+        if not self.active_connections:
+            return
+
+        message = {
+            "type": "chat",
+            "payload": {
+                "id": message_id,
+                "sender": sender,
+                "content": content,
+                "timestamp": timestamp
+            }
+        }
+        message_json = json.dumps(message)
+
+        tasks = []
+        for websocket in self.active_connections.values():
+            tasks.append(websocket.send_text(message_json))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                failed_username = list(self.active_connections.keys())[i] # TODO: This might not be accurate if dict order changes during async
+                print(f"Error sending chat message to {failed_username}: {result}")
+
 
 manager = ConnectionManager()
+
+# Need to import Chat model and SessionLocal for DB operations
+from backend.torb.models import Chat
+from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
+import datetime
+
+# This would ideally come from a shared DB session setup, e.g., from main.py or a db_utils.py
+# For simplicity here, let's assume a way to get a DB session.
+# This is a placeholder and needs proper SQLAlchemy session management.
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+DATABASE_URL = "sqlite:///./torb.db" # Make sure this matches your actual DB URL
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 
 async def presence_updater_task():
     while True:
@@ -107,6 +148,57 @@ async def websocket_endpoint(websocket: WebSocket):
             # if data == "ping":
             # await websocket.send_text("pong")
             print(f"Received message from {current_user.username}: {data}")
+
+            try:
+                message_data = json.loads(data)
+                if message_data.get("type") == "chat":
+                    content = message_data.get("content")
+                    if content:
+                        # Persist to DB
+                        db: Session = SessionLocal()
+                        try:
+                            # Ensure created_at is timezone-aware if your DB expects it
+                            # SQLAlchemy's func.now() for server_default usually handles this
+                            # If setting manually, ensure it's correct.
+                            chat_message = Chat(
+                                sender=current_user.username,
+                                content=content,
+                                target=None, # For global chat
+                                # created_at will be set by server_default
+                            )
+                            db.add(chat_message)
+                            db.commit()
+                            db.refresh(chat_message)
+
+                            # Broadcast the message
+                            # Ensure timestamp is in ISO format and includes timezone Z for UTC
+                            timestamp_iso = chat_message.created_at.isoformat()
+                            if chat_message.created_at.tzinfo is None:
+                                # If somehow timezone is not set, assume UTC and append 'Z'
+                                # This depends on how `func.now()` is configured with SQLAlchemy and DB
+                                # For SQLite with `DateTime(timezone=True)` and `func.now()`, it should be UTC.
+                                # Let's make it robust.
+                                timestamp_iso = chat_message.created_at.replace(tzinfo=datetime.timezone.utc).isoformat()
+
+                            await manager.broadcast_chat_message(
+                                sender=chat_message.sender,
+                                content=chat_message.content,
+                                timestamp=timestamp_iso,
+                                message_id=chat_message.id
+                            )
+                        except Exception as e:
+                            print(f"Error processing chat message: {e}")
+                            db.rollback()
+                        finally:
+                            db.close()
+                    else:
+                        print(f"Received chat message with no content from {current_user.username}")
+                # Handle other message types if any
+                # else if message_data.get("type") == "xyz":
+                #    ...
+
+            except json.JSONDecodeError:
+                print(f"Received non-JSON message from {current_user.username}: {data}")
             # We could allow clients to push their presence updates via WebSocket too
             # For now, the PUT /api/presence is the primary mechanism for track updates
 

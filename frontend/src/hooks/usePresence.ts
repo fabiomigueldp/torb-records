@@ -8,13 +8,34 @@ interface UserPresence {
   online: boolean;
 }
 
+interface UserPresence {
+  username: string;
+  track_id: string | null;
+  online: boolean;
+}
+
 interface PresenceMessage {
   type: 'presence';
   users: UserPresence[];
 }
 
+interface ChatMessagePayload {
+  id: number;
+  sender: string;
+  content: string;
+  timestamp: string; // ISO string
+}
+
+interface ChatMessage {
+  type: 'chat';
+  payload: ChatMessagePayload;
+}
+
+type WebSocketMessage = PresenceMessage | ChatMessage;
+
 const usePresence = () => {
   const [onlineUsers, setOnlineUsers] = useState<UserPresence[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessagePayload[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
@@ -43,7 +64,7 @@ const usePresence = () => {
 
     socketRef.current.onmessage = (event) => {
       try {
-        const message = JSON.parse(event.data as string) as PresenceMessage;
+        const message = JSON.parse(event.data as string) as WebSocketMessage; // Use the union type
         if (message.type === 'presence') {
           // Sort users: online first, then by username
           const sortedUsers = message.users.sort((a, b) => {
@@ -52,6 +73,23 @@ const usePresence = () => {
             return a.username.localeCompare(b.username);
           });
           setOnlineUsers(sortedUsers);
+        } else if (message.type === 'chat') {
+          setChatMessages((prevMessages) => {
+            // Add new message. Consider sorting or limiting the number of messages.
+            // For now, just append. Ensure no duplicates by ID if messages could be re-broadcast.
+            if (prevMessages.find(m => m.id === message.payload.id)) {
+              return prevMessages;
+            }
+            const newMessages = [...prevMessages, message.payload];
+            // Sort by timestamp ascending (oldest first) for display
+            newMessages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+            // Optional: Limit the number of stored messages to prevent memory issues
+            // const MAX_MESSAGES = 200;
+            // if (newMessages.length > MAX_MESSAGES) {
+            //   return newMessages.slice(newMessages.length - MAX_MESSAGES);
+            // }
+            return newMessages;
+          });
         }
       } catch (error) {
         console.error('Error processing message from WebSocket:', error);
@@ -114,9 +152,35 @@ const usePresence = () => {
   //   }
   // }, []);
 
-  return { onlineUsers, isConnected };
+  const sendChatMessage = useCallback((content: string) => {
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      const message = {
+        type: 'chat',
+        content: content,
+      };
+      socketRef.current.send(JSON.stringify(message));
+    } else {
+      console.error('WebSocket is not connected. Cannot send chat message.');
+      // Optionally, queue the message or notify the user
+    }
+  }, []); // Depends on socketRef, but socketRef.current changes don't trigger re-creation of this callback.
+
+  // Function to prepend older messages, typically fetched via HTTP
+  const loadOlderMessages = useCallback((olderMessages: ChatMessagePayload[]) => {
+    setChatMessages(prevMessages => {
+      const allMessages = [...olderMessages, ...prevMessages];
+      // Remove duplicates by ID, keeping the one from prevMessages if conflicts (though unlikely with this flow)
+      const uniqueMessages = Array.from(new Map(allMessages.map(msg => [msg.id, msg])).values());
+      // Sort by timestamp ascending
+      uniqueMessages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      return uniqueMessages;
+    });
+  }, []);
+
+
+  return { onlineUsers, chatMessages, isConnected, sendChatMessage, loadOlderMessages };
 };
 
 export default usePresence;
-export type { UserPresence }; // Export type for components
+export type { UserPresence, ChatMessagePayload }; // Export types for components
 // Ensure this file ends with a newline character for POSIX compliance.
