@@ -1,7 +1,8 @@
 import asyncio
 from fastapi import FastAPI, HTTPException, Response, status, Depends, Request
 from backend.auth import load_users, SessionManager, User, LoginRequest
-from backend.routes import preferences as preferences_router # Add this import
+from backend.routes import preferences as preferences_router
+from backend.routes import upload as upload_router # Import the new upload router
 from backend.torb.models import UserPreference # Added for preferences
 from backend.routes.preferences import get_db # Added for preferences
 from sqlalchemy.orm import Session # Added for preferences
@@ -10,6 +11,7 @@ app = FastAPI()
 
 # Include the preferences router
 app.include_router(preferences_router.router)
+app.include_router(upload_router.router) # Include the upload router
 
 # Instantiate SessionManager
 session_manager = SessionManager()

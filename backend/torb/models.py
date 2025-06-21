@@ -11,13 +11,18 @@ class UserPreference(Base):
     theme = Column(String, default="system")
     muted_uploaders = Column(JSON, default=[])
 
+import uuid # Add this import
+
 class Track(Base):
     __tablename__ = "tracks"
     id = Column(Integer, primary_key=True, autoincrement=True)
+    # Add a UUID field for unique identification in file paths
+    uuid = Column(String, default=lambda: str(uuid.uuid4()), unique=True, nullable=False)
     title = Column(String, nullable=False)
     uploader = Column(String, nullable=False) # Should this be a ForeignKey to a User table? For now, String.
-    cover_path = Column(String, nullable=True)
-    hls_root = Column(String, nullable=False)
+    original_path = Column(String, nullable=True) # Path to the original uploaded file, explicitly nullable
+    cover_filename = Column(String, nullable=True) # e.g., cover.jpg, explicitly nullable
+    hls_root = Column(String, nullable=True) # Path to master.m3u8, initially null, explicitly nullable
     status = Column(String, default="processing") # e.g., processing, ready, error
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
