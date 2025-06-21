@@ -13,7 +13,10 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
-USERS_FILE = 'config/users.json'
+import pathlib
+BACKEND_DIR = pathlib.Path(__file__).resolve().parent
+ROOT_DIR = BACKEND_DIR.parent
+USERS_FILE = ROOT_DIR / 'config/users.json'
 _users_cache = None
 _users_mtime = 0
 
@@ -161,8 +164,11 @@ session_manager = SessionManager()
 from fastapi import Request, HTTPException, status
 
 async def get_current_user(request: Request) -> User:
+    print(f"get_current_user: All request cookies: {request.cookies}") # Debug print
     sid = request.cookies.get("sid")
+    print(f"get_current_user: SID from cookie: {sid}") # Debug print
     if not sid:
+        print("get_current_user: SID not found in cookies.") # Debug print
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
@@ -170,7 +176,9 @@ async def get_current_user(request: Request) -> User:
         )
 
     # Use the global session_manager from this module
+    print(f"get_current_user: Validating SID '{sid}' with session_manager.") # Debug print
     username = session_manager.get_session(sid)
+    print(f"get_current_user: Username from session_manager: {username}") # Debug print
     if not username:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

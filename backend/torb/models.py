@@ -34,7 +34,7 @@ class Playlist(Base):
     name = Column(String, nullable=False)
     is_shared = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    tracks = relationship("PlaylistTrack", back_populates="playlist", cascade="all, delete-orphan")
+    tracks = relationship("PlaylistTrack", back_populates="playlist", cascade="all, delete-orphan", order_by="PlaylistTrack.position")
 
 class PlaylistTrack(Base):
     __tablename__ = "playlist_tracks"
