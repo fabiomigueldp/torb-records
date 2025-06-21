@@ -1,8 +1,15 @@
 import asyncio
 from fastapi import FastAPI, HTTPException, Response, status, Depends, Request
 from backend.auth import load_users, SessionManager, User, LoginRequest
+from backend.routes import preferences as preferences_router # Add this import
+from backend.torb.models import UserPreference # Added for preferences
+from backend.routes.preferences import get_db # Added for preferences
+from sqlalchemy.orm import Session # Added for preferences
 
 app = FastAPI()
+
+# Include the preferences router
+app.include_router(preferences_router.router)
 
 # Instantiate SessionManager
 session_manager = SessionManager()
@@ -79,6 +86,22 @@ async def login(login_request: LoginRequest, response: Response):
         samesite="lax", # Or "strict"
         # max_age can be set if needed, but session manager handles TTL
     )
+
+    # Add default preferences logic
+    db: Session = next(get_db())
+    try:
+        user_prefs = db.query(UserPreference).filter(UserPreference.username == user["username"]).one_or_none()
+        if not user_prefs:
+            default_prefs = UserPreference(
+                username=user["username"],
+                theme="synthwave", # Default theme
+                muted_uploaders=[]
+            )
+            db.add(default_prefs)
+            db.commit()
+    finally:
+        db.close()
+
     return {"message": "Login successful"}
 
 @app.get("/api/me", response_model=User)

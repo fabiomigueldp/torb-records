@@ -2,9 +2,11 @@
 import React, { Suspense } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext'; // Import useTheme
 
 const Layout: React.FC = () => {
   const { user, logout } = useAuth();
+  const { theme, setTheme, availableThemes } = useTheme(); // Use theme context
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -43,14 +45,16 @@ const Layout: React.FC = () => {
           <div className="flex-none">
             <ul className="menu menu-horizontal items-center">
               <li>
-                {/* Theme dropdown placeholder - Using details for a simple dropdown */}
                 <details>
-                  <summary>Theme</summary>
-                  <ul className="p-2 bg-base-100 rounded-t-none right-0">
-                    {/* Placeholder themes - In a real app, these would change the theme */}
-                    <li><a>Default</a></li>
-                    <li><a>Dark</a></li>
-                    <li><a>Light</a></li>
+                  <summary>Theme: {theme.charAt(0).toUpperCase() + theme.slice(1)}</summary>
+                  <ul className="p-2 bg-base-100 rounded-t-none right-0 shadow-lg">
+                    {availableThemes.map((themeName) => (
+                      <li key={themeName}>
+                        <a onClick={() => setTheme(themeName)}>
+                          {themeName.charAt(0).toUpperCase() + themeName.slice(1)}
+                        </a>
+                      </li>
+                    ))}
                   </ul>
                 </details>
               </li>
