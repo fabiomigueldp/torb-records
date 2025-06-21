@@ -79,7 +79,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       document.documentElement.setAttribute('data-theme', newTheme);
       await updateThemePreference(newTheme);
     } else {
-      console.warn(\`Attempted to set an unavailable theme: \${newTheme}\`);
+      console.warn(`Attempted to set an unavailable theme: ${newTheme}`);
     }
   }, []);
 

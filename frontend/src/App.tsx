@@ -1,9 +1,10 @@
 // frontend/src/App.tsx
-import React, { lazy, Suspense } from 'react';
+import React, { lazy, Suspense, useState, useCallback } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import Layout from './components/Layout'; // Will be created in next step
+import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
-import { useAuth } from './contexts/AuthContext'; // To check initial auth state for /login
+import { useAuth } from './contexts/AuthContext';
+import { AudioTrackInfo } from './components/AudioPlayer'; // Import Track type for player
 
 // Lazy load page components
 const LoginPage = lazy(() => import('./pages/LoginPage'));
@@ -28,16 +29,66 @@ const LoginPageWrapper: React.FC = () => {
 };
 
 function App() {
+  const [currentTrack, setCurrentTrack] = useState<AudioTrackInfo | null>(null);
+  const [queue, setQueue] = useState<AudioTrackInfo[]>([]);
+
+  const handlePlayTrack = useCallback((track: AudioTrackInfo, playNext: boolean = false) => {
+    setCurrentTrack(track);
+    setQueue(prevQueue => {
+      // Avoid duplicate if track is already in queue
+      const trackExists = prevQueue.find(t => t.id === track.id);
+      if (trackExists) {
+        // If track is already in queue, move it to the top (current playing)
+        // and potentially remove other instances if desired, or just ensure it's at top.
+        // For simplicity, if it exists, we assume it's being intentionally re-selected to play.
+        // The AudioPlayer itself handles adding trackToPlay to its internal queue.
+        return [track, ...prevQueue.filter(t => t.id !== track.id)];
+      }
+      return playNext ? [track, ...prevQueue] : [...prevQueue, track];
+    });
+  }, []);
+
+  const handleUpdateQueue = useCallback((newQueue: AudioTrackInfo[]) => {
+    setQueue(newQueue);
+  }, []);
+
+  const handlePlayNext = useCallback(() => {
+    if (queue.length > 0) {
+      const currentIndex = queue.findIndex(t => t.id === currentTrack?.id);
+      const nextIndex = (currentIndex + 1) % queue.length;
+      setCurrentTrack(queue[nextIndex]);
+    }
+  }, [currentTrack, queue]);
+
+  const handlePlayPrevious = useCallback(() => {
+    if (queue.length > 0) {
+      const currentIndex = queue.findIndex(t => t.id === currentTrack?.id);
+      const prevIndex = (currentIndex - 1 + queue.length) % queue.length;
+      setCurrentTrack(queue[prevIndex]);
+    }
+  }, [currentTrack, queue]);
+
+
   return (
     <Router>
-      <Suspense fallback={<div>Loading Page...</div>}>
+      <Suspense fallback={<div className="flex justify-center items-center h-screen"><span className="loading loading-spinner loading-lg"></span></div>}>
         <Routes>
           <Route path="/login" element={<LoginPageWrapper />} />
 
           {/* Routes requiring authentication and layout */}
-          <Route element={<Layout />}> {/* Layout will wrap these routes */}
+          {/* Pass player state and handlers to Layout */}
+          <Route element={
+            <Layout
+              playerTrack={currentTrack}
+              playerQueue={queue}
+              onUpdateQueue={handleUpdateQueue}
+              onPlayNext={handlePlayNext}
+              onPlayPrevious={handlePlayPrevious}
+            />
+          }>
             <Route element={<ProtectedRoute />}>
-              <Route path="/library" element={<LibraryPage />} />
+              {/* Pass playTrack handler to LibraryPage */}
+              <Route path="/library" element={<LibraryPage onPlayTrack={handlePlayTrack} />} />
               <Route path="/upload" element={<UploadPage />} />
               <Route path="/playlists" element={<PlaylistsPage />} />
               <Route path="/chat" element={<ChatPage />} />
