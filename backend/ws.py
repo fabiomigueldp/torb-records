@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Set, Dict, Any
+from typing import Set, Dict, Any, Optional, List # Added Optional, List
 from fastapi import APIRouter, WebSocket, Depends, WebSocketDisconnect, HTTPException, status
 from backend.auth import get_current_user, User # Assuming User model is appropriate
 
@@ -25,6 +25,29 @@ class ConnectionManager:
         # Optionally, remove from user_presences or mark as offline
         # For now, presence data persists until overwritten or explicitly cleared
         print(f"User {user.username} disconnected. Total connections: {len(self.active_connections)}")
+
+    async def _broadcast(self, message_json: str, target_users: Optional[List[str]] = None):
+        """Helper to broadcast a JSON message to all or specific connected users."""
+        if not self.active_connections:
+            return
+
+        tasks = []
+        # If target_users is specified, send only to them if they are active
+        # Otherwise, send to all active connections
+        users_to_send_to = target_users if target_users is not None else list(self.active_connections.keys())
+
+        active_target_users = []
+        for username in users_to_send_to:
+            if username in self.active_connections:
+                tasks.append(self.active_connections[username].send_text(message_json))
+                active_target_users.append(username)
+
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    failed_username = active_target_users[i] # Assumes results are in order of tasks
+                    print(f"Error broadcasting message to {failed_username}: {result}")
 
     async def send_personal_message(self, message: str, user: User):
         if user.username in self.active_connections:
@@ -61,41 +84,46 @@ class ConnectionManager:
                 tasks.append(self.active_connections[username].send_text(message_json))
 
         # Execute all send tasks concurrently
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                # Handle potential errors, e.g., client disconnected abruptly
-                failed_username = active_usernames[i]
-                print(f"Error sending presence to {failed_username}: {result}")
-                # Consider disconnecting this user if send fails repeatedly
+        # results = await asyncio.gather(*tasks, return_exceptions=True)
+        # for i, result in enumerate(results):
+        #     if isinstance(result, Exception):
+        #         # Handle potential errors, e.g., client disconnected abruptly
+        #         failed_username = active_usernames[i]
+        #         print(f"Error sending presence to {failed_username}: {result}")
+        #         # Consider disconnecting this user if send fails repeatedly
+        await self._broadcast(message_json)
+
+
+    async def broadcast_admin_event(self, event_data: Dict[str, Any]):
+        """Broadcasts an event specifically to connected admin users."""
+        # First, identify which connected users are admins.
+        # This requires knowing the admin status of users associated with active WebSockets.
+        # For now, we'll assume all connected users might be admins and filter on client-side,
+        # or we enhance connect() to store user's admin status.
+        # A simpler approach for now: broadcast to all, admin clients will pick it up.
+        # A better approach: manager.connect could store the User object, not just username.
+        # Let's assume for now we broadcast to all connected users.
+        # If performance becomes an issue or for security, this should be refined
+        # to target only actual admin users.
+
+        message = {"type": "admin_event", "payload": event_data}
+        message_json = json.dumps(message)
+        print(f"Broadcasting admin event: {message_json}")
+        await self._broadcast(message_json) # Broadcast to all connected clients
+
 
     async def broadcast_chat_message(self, sender: str, content: str, timestamp: str, message_id: int):
-        if not self.active_connections:
-            return
-
         message = {
-            "type": "chat", # This signifies a global chat message
+            "type": "chat",
             "payload": {
                 "id": message_id,
                 "sender": sender,
                 "content": content,
                 "timestamp": timestamp,
-                "target": None # Explicitly None for global chat
+                "target": None,
             }
         }
-        message_json = json.dumps(message)
-
-        tasks = []
-        active_usernames = list(self.active_connections.keys()) # Cache keys
-        for username in active_usernames:
-            if username in self.active_connections:
-                tasks.append(self.active_connections[username].send_text(message_json))
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                failed_username = active_usernames[i]
-                print(f"Error sending global chat message to {failed_username}: {result}")
+        await self._broadcast(json.dumps(message))
 
     async def send_direct_message(self, sender: str, recipient: str, content: str, timestamp: str, message_id: int):
         """Sends a direct message to the recipient and a copy to the sender."""

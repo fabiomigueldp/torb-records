@@ -6,9 +6,11 @@ from backend.routes import preferences as preferences_router
 from backend.routes import upload as upload_router
 from backend.routes import tracks as tracks_router
 from backend.routes import playlists as playlists_router
-from backend.routes import presence as presence_router # Added presence router
-from backend.routes import chat as chat_router # Added chat router
-from backend.ws import router as ws_router # Added WebSocket router
+from backend.routes import presence as presence_router
+from backend.routes import chat as chat_router
+from backend.routes import admin as admin_router # Added admin router
+from backend.routes import removal_requests as removal_requests_router # Added removal_requests router
+from backend.ws import router as ws_router
 from backend.ws import presence_updater_task # Added presence updater task
 from backend.torb.models import UserPreference
 from backend.routes.preferences import get_db
@@ -21,9 +23,11 @@ app.include_router(preferences_router.router)
 app.include_router(upload_router.router)
 app.include_router(tracks_router.router)
 app.include_router(playlists_router.router)
-app.include_router(presence_router.router) # Added presence router
-app.include_router(chat_router.router) # Added chat router
-app.include_router(ws_router) # Added WebSocket router
+app.include_router(presence_router.router)
+app.include_router(chat_router.router)
+app.include_router(admin_router.router) # Added admin router
+app.include_router(removal_requests_router.router) # Added removal_requests router
+app.include_router(ws_router)
 
 # SessionManager is now instantiated in auth.py and imported.
 # Startup and shutdown events will use the imported session_manager.
