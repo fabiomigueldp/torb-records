@@ -55,16 +55,17 @@ class ConnectionManager:
 
         # Create a list of tasks for sending messages
         tasks = []
-        for username, websocket in self.active_connections.items():
-            tasks.append(websocket.send_text(message_json))
+        active_usernames = list(self.active_connections.keys()) # Cache keys for stable indexing
+        for username in active_usernames:
+            if username in self.active_connections: # Check if still connected
+                tasks.append(self.active_connections[username].send_text(message_json))
 
         # Execute all send tasks concurrently
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 # Handle potential errors, e.g., client disconnected abruptly
-                # Username can be obtained from list(self.active_connections.keys())[i]
-                failed_username = list(self.active_connections.keys())[i]
+                failed_username = active_usernames[i]
                 print(f"Error sending presence to {failed_username}: {result}")
                 # Consider disconnecting this user if send fails repeatedly
 
@@ -73,25 +74,84 @@ class ConnectionManager:
             return
 
         message = {
-            "type": "chat",
+            "type": "chat", # This signifies a global chat message
             "payload": {
                 "id": message_id,
                 "sender": sender,
                 "content": content,
-                "timestamp": timestamp
+                "timestamp": timestamp,
+                "target": None # Explicitly None for global chat
             }
         }
         message_json = json.dumps(message)
 
         tasks = []
-        for websocket in self.active_connections.values():
-            tasks.append(websocket.send_text(message_json))
+        active_usernames = list(self.active_connections.keys()) # Cache keys
+        for username in active_usernames:
+            if username in self.active_connections:
+                tasks.append(self.active_connections[username].send_text(message_json))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                failed_username = list(self.active_connections.keys())[i] # TODO: This might not be accurate if dict order changes during async
-                print(f"Error sending chat message to {failed_username}: {result}")
+                failed_username = active_usernames[i]
+                print(f"Error sending global chat message to {failed_username}: {result}")
+
+    async def send_direct_message(self, sender: str, recipient: str, content: str, timestamp: str, message_id: int):
+        """Sends a direct message to the recipient and a copy to the sender."""
+        message_payload = {
+            "id": message_id,
+            "sender": sender,
+            "content": content,
+            "timestamp": timestamp,
+            "target": recipient # Indicates this is a DM and who it's for (from sender's perspective)
+        }
+
+        # Message for the recipient
+        recipient_message = {
+            "type": "dm", # Specific type for DMs to the recipient
+            "payload": {
+                **message_payload,
+                "from_user": sender # So recipient knows who sent it in the payload directly
+            }
+        }
+        recipient_message_json = json.dumps(recipient_message)
+
+        # Message for the sender (self-receipt)
+        # The sender's UI can use the 'target' field to place this in the correct DM thread
+        sender_receipt_payload = {
+            "id": message_id,
+            "sender": sender, # Message is from current_user
+            "content": content,
+            "timestamp": timestamp,
+            "target": recipient # To know which conversation this message belongs to
+        }
+        sender_message = {
+            "type": "dm_receipt", # Specific type for sender's copy of DM
+            "payload": sender_receipt_payload
+        }
+        sender_message_json = json.dumps(sender_message)
+
+        tasks = []
+        # Send to recipient if they are online
+        if recipient in self.active_connections:
+            tasks.append(self.active_connections[recipient].send_text(recipient_message_json))
+            print(f"Attempting to send DM from {sender} to {recipient}")
+        else:
+            print(f"Recipient {recipient} for DM from {sender} is not online.")
+
+        # Send to sender if they are online (they should be, as they initiated the message)
+        if sender in self.active_connections:
+            tasks.append(self.active_connections[sender].send_text(sender_message_json))
+            print(f"Attempting to send DM receipt to sender {sender} for message to {recipient}")
+
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results: # Can't easily map back to username here without more complex tracking
+                if isinstance(result, Exception):
+                    print(f"Error sending direct message/receipt: {result}")
+        else:
+            print(f"No active connections to send DM or receipt for message between {sender} and {recipient}")
 
 
 manager = ConnectionManager()
@@ -151,51 +211,82 @@ async def websocket_endpoint(websocket: WebSocket):
 
             try:
                 message_data = json.loads(data)
-                if message_data.get("type") == "chat":
-                    content = message_data.get("content")
-                    if content:
-                        # Persist to DB
-                        db: Session = SessionLocal()
-                        try:
-                            # Ensure created_at is timezone-aware if your DB expects it
-                            # SQLAlchemy's func.now() for server_default usually handles this
-                            # If setting manually, ensure it's correct.
-                            chat_message = Chat(
-                                sender=current_user.username,
-                                content=content,
-                                target=None, # For global chat
-                                # created_at will be set by server_default
-                            )
-                            db.add(chat_message)
-                            db.commit()
-                            db.refresh(chat_message)
+                message_type = message_data.get("type")
+                content = message_data.get("content")
 
-                            # Broadcast the message
-                            # Ensure timestamp is in ISO format and includes timezone Z for UTC
-                            timestamp_iso = chat_message.created_at.isoformat()
-                            if chat_message.created_at.tzinfo is None:
-                                # If somehow timezone is not set, assume UTC and append 'Z'
-                                # This depends on how `func.now()` is configured with SQLAlchemy and DB
-                                # For SQLite with `DateTime(timezone=True)` and `func.now()`, it should be UTC.
-                                # Let's make it robust.
-                                timestamp_iso = chat_message.created_at.replace(tzinfo=datetime.timezone.utc).isoformat()
+                if not content:
+                    print(f"Received message type '{message_type}' with no content from {current_user.username}")
+                    continue
 
-                            await manager.broadcast_chat_message(
-                                sender=chat_message.sender,
-                                content=chat_message.content,
-                                timestamp=timestamp_iso,
-                                message_id=chat_message.id
+                db: Session = SessionLocal()
+                try:
+                    timestamp_iso = None
+                    chat_message_id = None
+
+                    if message_type == "chat": # Global chat
+                        chat_message = Chat(
+                            sender=current_user.username,
+                            content=content,
+                            target=None, # For global chat
+                        )
+                        db.add(chat_message)
+                        db.commit()
+                        db.refresh(chat_message)
+                        timestamp_iso = chat_message.created_at.replace(tzinfo=datetime.timezone.utc).isoformat()
+                        chat_message_id = chat_message.id
+
+                        await manager.broadcast_chat_message(
+                            sender=chat_message.sender,
+                            content=chat_message.content,
+                            timestamp=timestamp_iso,
+                            message_id=chat_message_id
+                        )
+
+                    elif message_type == "dm":
+                        recipient = message_data.get("to")
+                        if not recipient:
+                            print(f"Received DM from {current_user.username} without recipient.")
+                            continue
+
+                        if recipient == current_user.username:
+                            print(f"User {current_user.username} tried to send DM to themselves.")
+                            # Optionally send an error message back to the user
+                            await manager.send_personal_message(
+                                json.dumps({
+                                    "type": "error",
+                                    "payload": {"message": "Cannot send direct message to yourself."}
+                                }),
+                                current_user
                             )
-                        except Exception as e:
-                            print(f"Error processing chat message: {e}")
-                            db.rollback()
-                        finally:
-                            db.close()
+                            continue
+
+                        chat_message = Chat(
+                            sender=current_user.username,
+                            content=content,
+                            target=recipient, # For DMs, target is the recipient
+                        )
+                        db.add(chat_message)
+                        db.commit()
+                        db.refresh(chat_message)
+                        timestamp_iso = chat_message.created_at.replace(tzinfo=datetime.timezone.utc).isoformat()
+                        chat_message_id = chat_message.id
+
+                        await manager.send_direct_message(
+                            sender=chat_message.sender,
+                            recipient=recipient,
+                            content=chat_message.content,
+                            timestamp=timestamp_iso,
+                            message_id=chat_message_id
+                        )
+
                     else:
-                        print(f"Received chat message with no content from {current_user.username}")
-                # Handle other message types if any
-                # else if message_data.get("type") == "xyz":
-                #    ...
+                        print(f"Received unknown message type '{message_type}' from {current_user.username}")
+
+                except Exception as e:
+                    print(f"Error processing message type '{message_type}' from {current_user.username}: {e}")
+                    db.rollback()
+                finally:
+                    db.close()
 
             except json.JSONDecodeError:
                 print(f"Received non-JSON message from {current_user.username}: {data}")

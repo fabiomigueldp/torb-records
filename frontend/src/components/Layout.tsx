@@ -25,19 +25,34 @@ const Layout: React.FC<LayoutProps> = ({
   const { user, logout } = useAuth();
   const { theme, setTheme, availableThemes } = useTheme();
   const navigate = useNavigate();
-  const { onlineUsers, isConnected } = usePresence(); // Use the presence hook
+  // Use the presence hook, now including DM related states and functions
+  const {
+    onlineUsers,
+    isConnected,
+    unreadCounts,
+    setCurrentUser,
+    requestNotificationPermission
+  } = usePresence();
   const [detailedUsers, setDetailedUsers] = useState<Array<UserPresence & { trackTitle?: string }>>([]);
 
+  useEffect(() => {
+    if (user) {
+      setCurrentUser(user.username);
+      requestNotificationPermission(); // Request permission when layout mounts for a logged-in user
+    } else {
+      setCurrentUser(null);
+    }
+  }, [user, setCurrentUser, requestNotificationPermission]);
+
   const handleLogout = async () => {
-    // The usePresence hook's cleanup should handle WebSocket disconnection
-    await logout();
+    await logout(); // AuthContext's logout
+    setCurrentUser(null); // Clear user in presence
     navigate('/login');
   };
 
   useEffect(() => {
-    // Fetch track titles for users who are online and have a track_id
     const fetchTrackTitles = async () => {
-      if (!user) { // Only fetch if user is logged in, otherwise WS won't connect
+      if (!user || !isConnected) {
         setDetailedUsers([]);
         return;
       }
@@ -45,8 +60,6 @@ const Layout: React.FC<LayoutProps> = ({
         onlineUsers.map(async (presenceUser) => {
           if (presenceUser.online && presenceUser.track_id) {
             try {
-              // Ensure track_id is a number if your API expects that.
-              // The presence message might send it as string or number.
               const track = await fetchTrackById(String(presenceUser.track_id));
               return { ...presenceUser, trackTitle: track?.title || 'Unknown Track' };
             } catch (error) {
@@ -57,18 +70,21 @@ const Layout: React.FC<LayoutProps> = ({
           return presenceUser;
         })
       );
-      // Filter out users who are not online for the display list,
-      // or handle how offline users with last known track are shown if desired.
-      // For now, focusing on online users.
       setDetailedUsers(usersWithTitles.filter(u => u.online));
     };
 
-    if (isConnected && user) {
-      fetchTrackTitles();
-    } else if (!isConnected || !user) {
-      setDetailedUsers([]); // Clear detailed users if not connected or not logged in
+    fetchTrackTitles();
+  }, [onlineUsers, isConnected, user]);
+
+  const handleUserClick = (username: string) => {
+    // Navigate to DM chat with the user
+    navigate(`/chat/dm/${username}`);
+    // Close the drawer if open (especially on mobile)
+    const drawerCheckbox = document.getElementById('my-drawer-3') as HTMLInputElement;
+    if (drawerCheckbox) {
+      drawerCheckbox.checked = false;
     }
-  }, [onlineUsers, isConnected, user]); // Re-run when onlineUsers, connection status, or user changes
+  };
 
   return (
     // Add pb-20 (padding-bottom) or similar to drawer-content to prevent overlap with fixed AudioPlayer
@@ -153,30 +169,36 @@ const Layout: React.FC<LayoutProps> = ({
             {user.is_admin && <li><Link to="/admin">Admin</Link></li>}
 
             <li className="menu-title mt-4">
-              <span>Online Users {isConnected ? `(${detailedUsers.length})` : '(Connecting...)'}</span>
+              <span>Online Users {isConnected ? `(${detailedUsers.filter(u => u.username !== user?.username).length})` : '(Connecting...)'}</span>
             </li>
-            {detailedUsers.length > 0 ? (
-              detailedUsers.map((pUser) => (
-                <li key={pUser.username} className="text-sm disabled"> {/* Use disabled for non-interactive items or style manually */}
-                  <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full ${pUser.online ? 'bg-green-500' : 'bg-gray-500'}`}></span>
-                    <span>{pUser.username}</span>
-                    {pUser.trackTitle && (
-                      <span className="text-xs opacity-70 truncate" title={pUser.trackTitle}>
-                        🎧 {pUser.trackTitle}
-                      </span>
-                    )}
-                    {!pUser.trackTitle && pUser.track_id && (
-                       <span className="text-xs opacity-70">🎧 Loading...</span>
+            {detailedUsers.filter(u => u.username !== user?.username).length > 0 ? (
+              detailedUsers
+                .filter(pUser => pUser.username !== user?.username) // Exclude current user from the list
+                .map((pUser) => (
+                <li key={pUser.username} onClick={() => handleUserClick(pUser.username)}>
+                  <div className="flex justify-between items-center w-full">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${pUser.online ? 'bg-green-500' : 'bg-gray-500'}`}></span>
+                      <span>{pUser.username}</span>
+                      {pUser.trackTitle && (
+                        <span className="text-xs opacity-70 truncate" title={pUser.trackTitle}>
+                          🎧 {pUser.trackTitle}
+                        </span>
+                      )}
+                      {!pUser.trackTitle && pUser.track_id && (
+                         <span className="text-xs opacity-70">🎧 Loading...</span>
+                      )}
+                    </div>
+                    {unreadCounts[pUser.username] > 0 && (
+                      <span className="badge badge-primary badge-sm">{unreadCounts[pUser.username]}</span>
                     )}
                   </div>
                 </li>
               ))
             ) : (
-              isConnected && <li><span className="text-xs italic">No users currently online.</span></li>
+              isConnected && <li><span className="text-xs italic">No other users currently online.</span></li>
             )}
             {!isConnected && user && <li><span className="text-xs italic">Connecting to presence service...</span></li>}
-
           </ul>
         </div>
       )}
