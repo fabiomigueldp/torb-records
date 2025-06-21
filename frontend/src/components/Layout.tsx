@@ -1,9 +1,11 @@
 // frontend/src/components/Layout.tsx
-import React, { Suspense } from 'react';
+import React, { Suspense, useState, useEffect } from 'react'; // Added useState, useEffect
 import { Outlet, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import AudioPlayer, { AudioTrackInfo } from './AudioPlayer'; // Import AudioPlayer and its Track type
+import usePresence, { UserPresence } from '../hooks/usePresence'; // Import usePresence hook and type
+import { fetchTrackById } from '../utils/api'; // Assuming an API utility to fetch track details
 
 interface LayoutProps {
   playerTrack: AudioTrackInfo | null;
@@ -23,11 +25,50 @@ const Layout: React.FC<LayoutProps> = ({
   const { user, logout } = useAuth();
   const { theme, setTheme, availableThemes } = useTheme();
   const navigate = useNavigate();
+  const { onlineUsers, isConnected } = usePresence(); // Use the presence hook
+  const [detailedUsers, setDetailedUsers] = useState<Array<UserPresence & { trackTitle?: string }>>([]);
 
   const handleLogout = async () => {
+    // The usePresence hook's cleanup should handle WebSocket disconnection
     await logout();
     navigate('/login');
   };
+
+  useEffect(() => {
+    // Fetch track titles for users who are online and have a track_id
+    const fetchTrackTitles = async () => {
+      if (!user) { // Only fetch if user is logged in, otherwise WS won't connect
+        setDetailedUsers([]);
+        return;
+      }
+      const usersWithTitles = await Promise.all(
+        onlineUsers.map(async (presenceUser) => {
+          if (presenceUser.online && presenceUser.track_id) {
+            try {
+              // Ensure track_id is a number if your API expects that.
+              // The presence message might send it as string or number.
+              const track = await fetchTrackById(String(presenceUser.track_id));
+              return { ...presenceUser, trackTitle: track?.title || 'Unknown Track' };
+            } catch (error) {
+              console.error(`Failed to fetch track details for ${presenceUser.track_id}:`, error);
+              return { ...presenceUser, trackTitle: 'Error loading track' };
+            }
+          }
+          return presenceUser;
+        })
+      );
+      // Filter out users who are not online for the display list,
+      // or handle how offline users with last known track are shown if desired.
+      // For now, focusing on online users.
+      setDetailedUsers(usersWithTitles.filter(u => u.online));
+    };
+
+    if (isConnected && user) {
+      fetchTrackTitles();
+    } else if (!isConnected || !user) {
+      setDetailedUsers([]); // Clear detailed users if not connected or not logged in
+    }
+  }, [onlineUsers, isConnected, user]); // Re-run when onlineUsers, connection status, or user changes
 
   return (
     // Add pb-20 (padding-bottom) or similar to drawer-content to prevent overlap with fixed AudioPlayer
@@ -110,6 +151,32 @@ const Layout: React.FC<LayoutProps> = ({
             <li><Link to="/playlists">Playlists</Link></li>
             <li><Link to="/chat">Chat</Link></li>
             {user.is_admin && <li><Link to="/admin">Admin</Link></li>}
+
+            <li className="menu-title mt-4">
+              <span>Online Users {isConnected ? `(${detailedUsers.length})` : '(Connecting...)'}</span>
+            </li>
+            {detailedUsers.length > 0 ? (
+              detailedUsers.map((pUser) => (
+                <li key={pUser.username} className="text-sm disabled"> {/* Use disabled for non-interactive items or style manually */}
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${pUser.online ? 'bg-green-500' : 'bg-gray-500'}`}></span>
+                    <span>{pUser.username}</span>
+                    {pUser.trackTitle && (
+                      <span className="text-xs opacity-70 truncate" title={pUser.trackTitle}>
+                        🎧 {pUser.trackTitle}
+                      </span>
+                    )}
+                    {!pUser.trackTitle && pUser.track_id && (
+                       <span className="text-xs opacity-70">🎧 Loading...</span>
+                    )}
+                  </div>
+                </li>
+              ))
+            ) : (
+              isConnected && <li><span className="text-xs italic">No users currently online.</span></li>
+            )}
+            {!isConnected && user && <li><span className="text-xs italic">Connecting to presence service...</span></li>}
+
           </ul>
         </div>
       )}
