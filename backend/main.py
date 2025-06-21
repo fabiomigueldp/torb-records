@@ -1,5 +1,7 @@
 import asyncio
 from fastapi import FastAPI, HTTPException, Response, status, Depends, Request
+from loguru import logger
+import sys
 # Import session_manager and get_current_user from backend.auth
 from backend.auth import load_users, User, LoginRequest, session_manager, get_current_user
 from backend.routes import preferences as preferences_router
@@ -37,10 +39,15 @@ from backend.routes.upload import create_media_directories # Import the function
 # Define a variable to hold the presence updater task
 presence_task = None
 
+# Configure Loguru
+logger.remove() # Remove default handler
+logger.add(sys.stderr, level="INFO") # Log to stderr with INFO level
+logger.add("logs/backend_{time}.log", rotation="1 day", level="INFO", enqueue=True) # Log to file with daily rotation
+
 @app.on_event("startup")
 async def startup_event():
     global presence_task
-    print("Torb Records API alive")
+    logger.info("Torb Records API starting up...")
     # Start the session cleanup task using the imported session_manager
     await session_manager.start_cleanup_task()
     # Create media directories
@@ -48,21 +55,24 @@ async def startup_event():
     # Start the presence updater task
     loop = asyncio.get_event_loop()
     presence_task = loop.create_task(presence_updater_task())
-    print("Presence updater task started.")
+    logger.info("Presence updater task started.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     global presence_task
+    logger.info("Torb Records API shutting down...")
     if presence_task:
         presence_task.cancel()
         try:
             await presence_task
         except asyncio.CancelledError:
-            print("Presence updater task cancelled.")
+            logger.info("Presence updater task cancelled.")
     await session_manager.close() # Gracefully stop cleanup task of the imported session_manager
+    logger.info("Torb Records API shutdown complete.")
 
 @app.get("/")
 async def read_root():
+    logger.info("Root endpoint was called.")
     return {"message": "Torb Records API is running"}
 
 # get_current_user is now imported from backend.auth
