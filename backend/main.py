@@ -5,7 +5,10 @@ from backend.auth import load_users, User, LoginRequest, session_manager, get_cu
 from backend.routes import preferences as preferences_router
 from backend.routes import upload as upload_router
 from backend.routes import tracks as tracks_router
-from backend.routes import playlists as playlists_router # Added playlists router
+from backend.routes import playlists as playlists_router
+from backend.routes import presence as presence_router # Added presence router
+from backend.ws import router as ws_router # Added WebSocket router
+from backend.ws import presence_updater_task # Added presence updater task
 from backend.torb.models import UserPreference
 from backend.routes.preferences import get_db
 from sqlalchemy.orm import Session
@@ -16,23 +19,40 @@ app = FastAPI()
 app.include_router(preferences_router.router)
 app.include_router(upload_router.router)
 app.include_router(tracks_router.router)
-app.include_router(playlists_router.router) # Added playlists router
+app.include_router(playlists_router.router)
+app.include_router(presence_router.router) # Added presence router
+app.include_router(ws_router) # Added WebSocket router
 
 # SessionManager is now instantiated in auth.py and imported.
 # Startup and shutdown events will use the imported session_manager.
 
 from backend.routes.upload import create_media_directories # Import the function
 
+# Define a variable to hold the presence updater task
+presence_task = None
+
 @app.on_event("startup")
 async def startup_event():
+    global presence_task
     print("Torb Records API alive")
     # Start the session cleanup task using the imported session_manager
     await session_manager.start_cleanup_task()
     # Create media directories
     create_media_directories()
+    # Start the presence updater task
+    loop = asyncio.get_event_loop()
+    presence_task = loop.create_task(presence_updater_task())
+    print("Presence updater task started.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    global presence_task
+    if presence_task:
+        presence_task.cancel()
+        try:
+            await presence_task
+        except asyncio.CancelledError:
+            print("Presence updater task cancelled.")
     await session_manager.close() # Gracefully stop cleanup task of the imported session_manager
 
 @app.get("/")

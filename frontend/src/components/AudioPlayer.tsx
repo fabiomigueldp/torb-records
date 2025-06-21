@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react'; // Added useCallback
 import Hls from 'hls.js';
 import WaveSurfer from 'wavesurfer.js';
+import { updatePresence } from '../utils/api'; // Import the updatePresence utility
+import { debounce } from '../utils/debounce'; // Import debounce
 
 // Define Track interface matching LibraryPage and backend
 interface Track {
-  id: number;
+  id: number; // Keep as number, will be stringified for API if needed
   title: string;
   uploader: string;
   cover_url: string | null;
@@ -35,8 +37,21 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ trackToPlay, queue, onNext, o
   const hlsRef = useRef<Hls | null>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const waveformContainerRef = useRef<HTMLDivElement>(null);
+  const lastReportedTrackIdRef = useRef<string | null>(null); // Ref to store last reported track ID
 
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+  // Debounced function to update presence
+  const debouncedUpdatePresence = useCallback(
+    debounce((trackId: string | null) => {
+      // Only call API if trackId has actually changed
+      if (trackId !== lastReportedTrackIdRef.current) {
+        updatePresence(trackId);
+        lastReportedTrackIdRef.current = trackId;
+      }
+    }, 500), // 500ms debounce delay
+    [] // No dependencies, this function is stable
+  );
 
   useEffect(() => {
     setInternalQueue(queue);
@@ -55,10 +70,33 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ trackToPlay, queue, onNext, o
       // If no specific track to play but queue has items, play first from queue
       setCurrentTrack(internalQueue[0]);
     }
-  }, [trackToPlay]);
+  }, [trackToPlay, internalQueue, onQueueUpdate]); // Added dependencies
 
 
   useEffect(() => {
+    // Report presence when currentTrack changes or when playback starts/stops
+    // Consider if isPlaying should also trigger this directly, or if currentTrack is enough
+    if (currentTrack && isPlaying) {
+      debouncedUpdatePresence(String(currentTrack.id));
+    } else if (!isPlaying && lastReportedTrackIdRef.current !== null) {
+      // If playback stops and we were previously reporting a track, report null
+      // This handles pause, and initial state before play.
+      // It might be better to only report null on explicit stop or end of track.
+      // For now, any !isPlaying state after having a track will clear presence.
+      // This might lead to "User is listening to nothing" frequently.
+      // Let's refine this: report null only if currentTrack exists but is paused.
+      // If currentTrack is null, it's handled by the next `else if`
+      if (currentTrack) { // only report null if there WAS a track that is now not playing
+        debouncedUpdatePresence(null);
+      }
+    } else if (!currentTrack && lastReportedTrackIdRef.current !== null) {
+        // If there's no track at all (e.g. queue finished or cleared)
+        debouncedUpdatePresence(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTrack, isPlaying, debouncedUpdatePresence]); // Added debouncedUpdatePresence, it's stable
+
+
     if (currentTrack && currentTrack.uuid) {
       const streamUrl = `/api/stream/${currentTrack.uuid}/master.m3u8`;
       if (audioRef.current) {
@@ -208,8 +246,23 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ trackToPlay, queue, onNext, o
         wavesurferRef.current.destroy();
         wavesurferRef.current = null;
       }
-    };
-  }, [currentTrack, isPlaying]); // isPlaying dependency ensures re-evaluation if play state changes, though currentTrack is primary driver for waveform.
+      // Cleanup function for main useEffect
+      return () => {
+        // Ensure that on unmount, if a track was being reported, we clear it.
+        // This check is important to avoid sending null if nothing was ever reported.
+        if (lastReportedTrackIdRef.current !== null) {
+            updatePresence(null); // Send immediately, not debounced, on unmount
+            lastReportedTrackIdRef.current = null;
+        }
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+        }
+        if (wavesurferRef.current) {
+            wavesurferRef.current.destroy();
+        }
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTrack, isPlaying]); // isPlaying dependency ensures re-evaluation if play state changes, though currentTrack is primary driver for waveform. Also, presence effect depends on these.
 
   const handlePlayPause = () => {
     if (!audioRef.current || !currentTrack) return;
