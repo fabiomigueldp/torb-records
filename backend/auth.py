@@ -46,7 +46,22 @@ class SessionManager:
         self._sessions = {}  # {token: (username, creation_time)}
         self._session_ttl = 4 * 60 * 60  # 4 hours in seconds
         self._cleanup_interval = 30 * 60  # 30 minutes in seconds
-        self._cleanup_task = asyncio.create_task(self._cleanup_sessions())
+        self._cleanup_task: asyncio.Task | None = None
+
+    async def start_cleanup_task(self):
+        """Starts the session cleanup task if not already running."""
+        if self._cleanup_task is None or self._cleanup_task.done():
+            # Ensure there's a running loop. This should be true if called from FastAPI startup.
+            try:
+                loop = asyncio.get_running_loop()
+                self._cleanup_task = loop.create_task(self._cleanup_sessions())
+                print("Session cleanup task started.")
+            except RuntimeError:
+                print("Error: No running event loop to start session cleanup task.")
+                # Optionally, re-raise or handle as appropriate if this method
+                # could be called from a context without a loop.
+                # For FastAPI startup, a loop is guaranteed.
+
 
     def create_session(self, username: str) -> str:
         """Creates a new session for the given username."""
@@ -138,3 +153,37 @@ if __name__ == '__main__':
     # Ensure config/users.json exists or can be created.
     # python backend/auth.py
     pass # asyncio.run(main()) # This would run the example if uncommented
+
+# Instantiate SessionManager globally within auth.py
+session_manager = SessionManager()
+
+# Imports for get_current_user
+from fastapi import Request, HTTPException, status
+
+async def get_current_user(request: Request) -> User:
+    sid = request.cookies.get("sid")
+    if not sid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Use the global session_manager from this module
+    username = session_manager.get_session(sid)
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid session token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    users = load_users()
+    current_user_data = next((user for user in users if user["username"] == username), None)
+    if not current_user_data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found for session", # Should ideally not happen
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return User(username=current_user_data["username"], is_admin=current_user_data["is_admin"])

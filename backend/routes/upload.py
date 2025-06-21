@@ -5,20 +5,22 @@ from pathlib import Path
 import shutil
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, BackgroundTasks
-from sqlalchemy.orm import Session
-
+from sqlalchemy.orm import Session, sessionmaker # Added sessionmaker
 from backend.auth import User, get_current_user
 from backend.torb.models import Track
 from backend.routes.preferences import get_db # Reusing get_db from preferences for now
 
 router = APIRouter()
 
-UPLOAD_DIR = Path("/uploads")
-MEDIA_DIR = Path("/media")
+UPLOAD_DIR = Path("upload-data") # Changed to relative path for better testability / dev environment
+MEDIA_DIR = Path("media-data")   # Changed to relative path
 
-# Ensure upload and media directories exist (though Docker volumes should handle this)
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+# Function to create directories, to be called at app startup
+def create_media_directories():
+    print(f"Ensuring UPLOAD_DIR exists: {UPLOAD_DIR.resolve()}")
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"Ensuring MEDIA_DIR exists: {MEDIA_DIR.resolve()}")
+    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 from backend.routes.preferences import SessionLocal # For creating session in background task
 

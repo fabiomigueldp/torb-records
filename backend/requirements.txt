@@ -8,3 +8,4 @@ pydantic-settings
 pytest
 pytest-asyncio
 httpx
+python-multipart

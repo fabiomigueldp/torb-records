@@ -24,6 +24,7 @@ class Track(Base):
     cover_filename = Column(String, nullable=True) # e.g., cover.jpg, explicitly nullable
     hls_root = Column(String, nullable=True) # Path to master.m3u8, initially null, explicitly nullable
     status = Column(String, default="processing") # e.g., processing, ready, error
+    duration = Column(Integer, nullable=True) # Duration in seconds
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Playlist(Base):

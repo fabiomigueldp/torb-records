@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import NoResultFound # Import NoResultFound
-from backend.auth import User, get_current_user # Assuming get_current_user authenticates and returns a User model
+from backend.auth import User, get_current_user # User and get_current_user from auth
 from backend.torb.models import UserPreference # Assuming UserPreference model is in models.py
 from pydantic import BaseModel, Json # For request body validation
 
