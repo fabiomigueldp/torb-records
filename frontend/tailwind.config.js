@@ -8,4 +8,13 @@ export default {
     extend: {},
   },
   plugins: [require("daisyui")],
+  daisyui: {
+    themes: [
+      "neon",
+      "retrocrt",
+      "synthwave",
+      "vaporwave",
+      "midnight",
+    ],
+  },
 }
