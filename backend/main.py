@@ -5,6 +5,7 @@ from backend.auth import load_users, User, LoginRequest, session_manager, get_cu
 from backend.routes import preferences as preferences_router
 from backend.routes import upload as upload_router
 from backend.routes import tracks as tracks_router
+from backend.routes import playlists as playlists_router # Added playlists router
 from backend.torb.models import UserPreference
 from backend.routes.preferences import get_db
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ app = FastAPI()
 app.include_router(preferences_router.router)
 app.include_router(upload_router.router)
 app.include_router(tracks_router.router)
+app.include_router(playlists_router.router) # Added playlists router
 
 # SessionManager is now instantiated in auth.py and imported.
 # Startup and shutdown events will use the imported session_manager.
@@ -56,7 +58,7 @@ async def login(login_request: LoginRequest, response: Response):
         key="sid",
         value=session_token,
         httponly=True,
-        secure=True, # Set to True in production if using HTTPS
+        secure=False, # Set to False for testing with http://testserver
         samesite="lax", # Or "strict"
         # max_age can be set if needed, but session manager handles TTL
     )
