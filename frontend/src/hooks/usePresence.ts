@@ -27,17 +27,53 @@ interface ChatMessagePayload {
 }
 
 interface ChatMessage {
-  type: 'chat';
-  payload: ChatMessagePayload;
+  type: 'chat'; // Global chat message
+  payload: ChatMessagePayload; // target will be null
 }
 
-type WebSocketMessage = PresenceMessage | ChatMessage;
+interface DirectMessage {
+  type: 'dm'; // DM received by the recipient
+  payload: ChatMessagePayload & { from_user: string }; // from_user is the sender, target is recipient (current user)
+}
+
+interface DirectMessageReceipt {
+  type: 'dm_receipt'; // DM receipt for the sender
+  payload: ChatMessagePayload; // sender is current user, target is the recipient
+}
+
+interface ErrorMessage {
+  type: 'error';
+  payload: { message: string };
+}
+
+type WebSocketMessage = PresenceMessage | ChatMessage | DirectMessage | DirectMessageReceipt | ErrorMessage;
+
+// Define a structure for storing DMs, keyed by the other user's username
+export interface DirectMessagesState {
+  [username: string]: ChatMessagePayload[];
+}
+
+// Define a structure for unread counts, keyed by username
+export interface UnreadCountsState {
+  [username: string]: number;
+}
+
+import {
+  getUnreadCount,
+  incrementUnreadCount,
+  clearUnreadCount,
+  getAllUnreadCounts,
+  setUnreadCount
+} from '../lib/indexedDb'; // IndexedDB utilities
 
 const usePresence = () => {
   const [onlineUsers, setOnlineUsers] = useState<UserPresence[]>([]);
-  const [chatMessages, setChatMessages] = useState<ChatMessagePayload[]>([]);
+  const [globalChatMessages, setGlobalChatMessages] = useState<ChatMessagePayload[]>([]);
+  const [directMessages, setDirectMessages] = useState<DirectMessagesState>({});
+  const [unreadCounts, setUnreadCounts] = useState<UnreadCountsState>({});
   const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
+  const currentUsernameRef = useRef<string | null>(null); // To store current user's name for DM logic
   const reconnectAttemptsRef = useRef(0);
   const maxReconnectAttempts = 10; // Max attempts before stopping
   const baseReconnectDelay = 1000; // 1 second
@@ -60,40 +96,99 @@ const usePresence = () => {
       console.log('WebSocket connected.');
       setIsConnected(true);
       reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful connection
+      // Load initial unread counts from IndexedDB
+      getAllUnreadCounts().then(counts => setUnreadCounts(counts));
     };
 
     socketRef.current.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data as string) as WebSocketMessage; // Use the union type
+
         if (message.type === 'presence') {
-          // Sort users: online first, then by username
           const sortedUsers = message.users.sort((a, b) => {
             if (a.online && !b.online) return -1;
             if (!a.online && b.online) return 1;
             return a.username.localeCompare(b.username);
           });
           setOnlineUsers(sortedUsers);
-        } else if (message.type === 'chat') {
-          setChatMessages((prevMessages) => {
-            // Add new message. Consider sorting or limiting the number of messages.
-            // For now, just append. Ensure no duplicates by ID if messages could be re-broadcast.
-            if (prevMessages.find(m => m.id === message.payload.id)) {
-              return prevMessages;
-            }
+        } else if (message.type === 'chat') { // Global chat message
+          setGlobalChatMessages((prevMessages) => {
+            if (prevMessages.find(m => m.id === message.payload.id)) return prevMessages;
             const newMessages = [...prevMessages, message.payload];
-            // Sort by timestamp ascending (oldest first) for display
             newMessages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-            // Optional: Limit the number of stored messages to prevent memory issues
-            // const MAX_MESSAGES = 200;
-            // if (newMessages.length > MAX_MESSAGES) {
-            //   return newMessages.slice(newMessages.length - MAX_MESSAGES);
-            // }
             return newMessages;
           });
+        } else if (message.type === 'dm' || message.type === 'dm_receipt') {
+          const dmPayload = message.payload;
+          // Determine the other user involved in the DM
+          // For 'dm', `from_user` is the sender. For 'dm_receipt', `target` is the other user.
+          const otherUser = message.type === 'dm' ? (message.payload as DirectMessage['payload']).from_user : dmPayload.target;
+
+          if (!otherUser) {
+            console.error("DM or receipt does not have a valid other user:", message);
+            return;
+          }
+
+          setDirectMessages(prevDms => {
+            const userDms = prevDms[otherUser] || [];
+            if (userDms.find(m => m.id === dmPayload.id)) return prevDms; // Avoid duplicates
+            const updatedUserDms = [...userDms, dmPayload];
+            updatedUserDms.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+            return { ...prevDms, [otherUser]: updatedUserDms };
+          });
+
+          // Handle unread counts and notifications for incoming DMs ('dm' type)
+          // Only increment if the message is from another user (not a receipt for self-sent message)
+          // and the chat window for this user is not currently active (this check happens in ChatPage.tsx)
+          if (message.type === 'dm') {
+            const sender = (message.payload as DirectMessage['payload']).from_user;
+            // Check if the current user is the recipient
+            if (dmPayload.target === currentUsernameRef.current) {
+                 // Heuristic: if document is hidden or chat with `sender` is not active, increment unread.
+                 // The active chat check will be more robustly handled in ChatPage/DMView.
+                if (document.hidden || !isActiveChat(sender)) {
+                    incrementUnreadCount(sender).then(newCount => {
+                        setUnreadCounts(prev => ({ ...prev, [sender]: newCount }));
+                        showNotification(sender, dmPayload.content);
+                    });
+                } else {
+                    // If chat is active, clear unread for this user as they are seeing the message
+                    clearUnreadCount(sender).then(() => {
+                        setUnreadCounts(prev => ({ ...prev, [sender]: 0 }));
+                    });
+                }
+            }
+          }
+        } else if (message.type === 'error') {
+          // Handle errors, e.g., display a toast notification to the user
+          console.error('Received error from server:', message.payload.message);
+          // Example: alert(message.payload.message);
         }
+
       } catch (error) {
         console.error('Error processing message from WebSocket:', error);
       }
+    };
+
+    // Placeholder for isActiveChat - this would ideally be passed in or managed by a context
+    // For now, this is a simplified version. A more robust solution would involve knowing which DM view is active.
+    const isActiveChat = (username: string) => {
+        // This is a temporary placeholder. In a real app, you'd check if the chat UI for `username` is currently visible.
+        // For example, by checking the current route or a state variable in a chat context.
+        // if in a DM view with 'username', return true.
+        // This will be refined when ChatPage is updated.
+        const currentPath = window.location.pathname;
+        return currentPath.includes(`/chat/dm/${username}`) && !document.hidden;
+    };
+
+
+    const showNotification = (sender: string, content: string) => {
+        if (Notification.permission === 'granted' && document.hidden) {
+            new Notification(`New message from ${sender}`, {
+                body: content,
+                icon: '/favicon.ico', // Optional: add an icon
+            });
+        }
     };
 
     socketRef.current.onerror = (error) => {
@@ -152,35 +247,101 @@ const usePresence = () => {
   //   }
   // }, []);
 
-  const sendChatMessage = useCallback((content: string) => {
+  const sendGlobalChatMessage = useCallback((content: string) => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       const message = {
-        type: 'chat',
+        type: 'chat', // Global chat
         content: content,
       };
       socketRef.current.send(JSON.stringify(message));
     } else {
-      console.error('WebSocket is not connected. Cannot send chat message.');
-      // Optionally, queue the message or notify the user
+      console.error('WebSocket is not connected. Cannot send global chat message.');
     }
-  }, []); // Depends on socketRef, but socketRef.current changes don't trigger re-creation of this callback.
+  }, []);
 
-  // Function to prepend older messages, typically fetched via HTTP
-  const loadOlderMessages = useCallback((olderMessages: ChatMessagePayload[]) => {
-    setChatMessages(prevMessages => {
+  const sendDirectMessage = useCallback((recipient: string, content: string) => {
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      if (!currentUsernameRef.current) {
+        console.error("Current user's username is not set. Cannot send DM.");
+        return;
+      }
+      if (recipient === currentUsernameRef.current) {
+        console.warn("Attempting to send DM to self. This should be handled by UI.");
+        // UI should prevent this, but as a fallback, do nothing.
+        return;
+      }
+      const message = {
+        type: 'dm',
+        to: recipient,
+        content: content,
+      };
+      socketRef.current.send(JSON.stringify(message));
+    } else {
+      console.error('WebSocket is not connected. Cannot send direct message.');
+    }
+  }, []); // currentUsernameRef is a ref, doesn't need to be in dependency array
+
+  // Function to prepend older global messages
+  const loadOlderGlobalMessages = useCallback((olderMessages: ChatMessagePayload[]) => {
+    setGlobalChatMessages(prevMessages => {
       const allMessages = [...olderMessages, ...prevMessages];
-      // Remove duplicates by ID, keeping the one from prevMessages if conflicts (though unlikely with this flow)
       const uniqueMessages = Array.from(new Map(allMessages.map(msg => [msg.id, msg])).values());
-      // Sort by timestamp ascending
       uniqueMessages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
       return uniqueMessages;
     });
   }, []);
 
+  // Function to prepend older DMs for a specific user
+  const loadOlderDirectMessages = useCallback((username: string, olderMessages: ChatMessagePayload[]) => {
+    setDirectMessages(prevDms => {
+      const userDms = prevDms[username] || [];
+      const allMessages = [...olderMessages, ...userDms];
+      const uniqueMessages = Array.from(new Map(allMessages.map(msg => [msg.id, msg])).values());
+      uniqueMessages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      return { ...prevDms, [username]: uniqueMessages };
+    });
+  }, []);
 
-  return { onlineUsers, chatMessages, isConnected, sendChatMessage, loadOlderMessages };
+  // Function to set the current user's username - typically called from AuthContext
+  const setCurrentUser = useCallback((username: string | null) => {
+    currentUsernameRef.current = username;
+  }, []);
+
+  // Function to manually mark DMs as read for a user
+  const markDmsAsRead = useCallback(async (username: string) => {
+    await clearUnreadCount(username);
+    setUnreadCounts(prev => ({ ...prev, [username]: 0 }));
+  }, []);
+
+
+  return {
+    onlineUsers,
+    globalChatMessages,
+    directMessages,
+    unreadCounts,
+    isConnected,
+    sendGlobalChatMessage,
+    sendDirectMessage,
+    loadOlderGlobalMessages,
+    loadOlderDirectMessages,
+    setCurrentUser,
+    markDmsAsRead,
+    // For notification permission request:
+    requestNotificationPermission: () => {
+        if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+            Notification.requestPermission().then(permission => {
+                if (permission === 'granted') {
+                    console.log('Notification permission granted.');
+                } else {
+                    console.log('Notification permission denied.');
+                }
+            });
+        }
+    }
+  };
 };
 
 export default usePresence;
 export type { UserPresence, ChatMessagePayload }; // Export types for components
+// Ensure this file ends with a newline character for POSIX compliance.
 // Ensure this file ends with a newline character for POSIX compliance.
